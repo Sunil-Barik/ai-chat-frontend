@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  'https://ai-chat-backend-u5ud.onrender.com';
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
@@ -64,30 +66,70 @@ export const streamChatMessage = async (
     );
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+
+      throw new Error(
+        errorText || `HTTP error! status: ${response.status}`
+      );
+    }
+
+    if (!response.body) {
+      throw new Error('Streaming response body is empty.');
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
 
+    let buffer = '';
+
     while (true) {
       const { value, done } = await reader.read();
 
-      if (done) break;
+      if (done) {
+        break;
+      }
 
-      const chunk = decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-      const lines = chunk.split('\n');
+      const lines = buffer.split('\n');
+
+      // Keep incomplete last line for the next chunk
+      buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (line.startsWith('data:')) {
-          const content = line.slice(5).trimStart();
+        const trimmedLine = line.trim();
 
-          if (content) {
+        if (!trimmedLine) {
+          continue;
+        }
+
+        if (trimmedLine.startsWith('data:')) {
+          const content = trimmedLine.slice(5).trimStart();
+
+          if (content && onChunk) {
             onChunk(content);
           }
-        } else if (line.trim() && !line.startsWith('event:')) {
-          onChunk(line);
+        } else if (!trimmedLine.startsWith('event:')) {
+          if (onChunk) {
+            onChunk(trimmedLine);
+          }
+        }
+      }
+    }
+
+    // Process anything remaining in the buffer
+    if (buffer.trim()) {
+      const remaining = buffer.trim();
+
+      if (remaining.startsWith('data:')) {
+        const content = remaining.slice(5).trimStart();
+
+        if (content && onChunk) {
+          onChunk(content);
+        }
+      } else if (!remaining.startsWith('event:')) {
+        if (onChunk) {
+          onChunk(remaining);
         }
       }
     }
